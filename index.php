@@ -60,6 +60,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['userEmail'], $_POST['p
         .btn {
             margin-top: 10px; /* Adds vertical spacing above each button */
         }
+        .form-footer {
+            text-align: center;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -80,7 +84,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['userEmail'], $_POST['p
             </div>
             <div>
                 <a href="signup.php" class="btn" id="signUpButton">Sign Up</a>
-
+            </div>
+            <div class="form-footer">
+                <a href="forgotpassword.php" style="text-decoration: underline;">Forgot Password?</a>
             </div>
         </form>
     </div>
