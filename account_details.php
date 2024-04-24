@@ -15,71 +15,109 @@ if (!isset($_SESSION['userid'])) {
 require_once 'includes/database-connection.php';
 
 $accountID = $_GET['accountID'] ?? null; // Get the accountID from the URL
+// Function to add a new transaction
+function addTransaction($accountID, $description, $amount, $date, $type, $category) {
+    global $pdo;
 
-function updateAccountBalance($pdo, $accountID) {
-    // Calculate the new balance
-    $stmt = $pdo->prepare("SELECT SUM(CASE WHEN transactionType = 'Income' THEN transactionAmount ELSE -transactionAmount END) AS balance FROM transactions WHERE accountID = ?");
-    $stmt->execute([$accountID]);
-    $balance = $stmt->fetchColumn();
+    $transactionAmount = ($type === 'Expense') ? -$amount : $amount;
 
-    // Update the account balance in the account table
-    $updateStmt = $pdo->prepare("UPDATE account SET accountBalance = ? WHERE accountID = ?");
-    $updateStmt->execute([$balance, $accountID]);
-
-    return $balance;
-}
-
-// Handle POST requests for adding transactions
-if (isset($_POST['add'])) {
     $stmt = $pdo->prepare("INSERT INTO transactions (transactionDescription, transactionAmount, transactionDate, transactionType, accountID, categoryID) VALUES (?, ?, ?, ?, ?, ?)");
-    $stmt->execute([$_POST['description'], $_POST['amount'], $_POST['date'], $_POST['type'], $accountID, $_POST['category']]);
+    $stmt->execute([$description, $transactionAmount, $date, $type, $accountID, $category]);
 
     // Update account balance
-    updateAccountBalance($pdo, $accountID);
+    updateAccountBalance($accountID, $transactionAmount);
 
+    // Redirect to account details page
     header('Location: account_details.php?accountID=' . $accountID);
     exit();
 }
+
+// Function to update account balance
+function updateAccountBalance($accountID, $transactionAmount) {
+    global $pdo;
+
+    // Fetch the initial balance from the account table
+    $balanceStmt = $pdo->prepare("SELECT accountBalance FROM account WHERE accountID = ?");
+    $balanceStmt->execute([$accountID]);
+    $initialBalance = $balanceStmt->fetchColumn() ?: 0; // If null, default to 0
+
+    // Calculate new balance
+    $newBalance = $initialBalance + $transactionAmount;
+
+    // Update the account balance in the account table
+    $updateStmt = $pdo->prepare("UPDATE account SET accountBalance = ? WHERE accountID = ?");
+    $updateStmt->execute([$newBalance, $accountID]);
+}
+
+// Function to delete a transaction
+function deleteTransaction($accountID, $transactionID) {
+    global $pdo;
+
+    $stmt = $pdo->prepare("SELECT transactionAmount, transactionType FROM transactions WHERE transactionID = ?");
+    $stmt->execute([$transactionID]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $transactionAmount = $result['transactionAmount'];
+    $transactionType = $result['transactionType'];
+
+    // Update account balance
+    updateAccountBalance($accountID, ($transactionType === 'Expense') ? abs($transactionAmount) : -$transactionAmount);
+
+    // Delete the transaction
+    $stmt = $pdo->prepare("DELETE FROM transactions WHERE transactionID = ?");
+    $stmt->execute([$transactionID]);
+
+    // Redirect to account details page
+    header('Location: account_details.php?accountID=' . $accountID);
+    exit();
+}
+// Fetch transactions for the selected account
+function fetchTransactions($accountID, $search = '', $sort = 'transactionDate', $order = 'DESC') {
+    global $pdo;
+
+    $transactionsStmt = $pdo->prepare("SELECT t.transactionID, t.transactionDescription, t.transactionAmount, t.transactionDate, t.transactionType, c.categoryName FROM transactions t LEFT JOIN category c ON t.categoryID = c.categoryID WHERE t.accountID = ? AND (t.transactionDescription LIKE ? OR t.transactionAmount LIKE ?) ORDER BY $sort $order");
+    $transactionsStmt->execute([$accountID, '%' . $search . '%', '%' . $search . '%']);
+    return $transactionsStmt->fetchAll();
+}
+
+// Fetch the current balance from the account table
+function fetchCurrentBalance($accountID) {
+    global $pdo;
+
+    $balanceStmt = $pdo->prepare("SELECT accountBalance FROM account WHERE accountID = ?");
+    $balanceStmt->execute([$accountID]);
+    return $balanceStmt->fetchColumn();
+}
+
+if (isset($_POST['add'])) {
+    addTransaction($_GET['accountID'], $_POST['description'], $_POST['amount'], $_POST['date'], $_POST['type'], $_POST['category']);
+}
+
+if (isset($_GET['delete'])) {
+    deleteTransaction($_GET['accountID'], $_GET['delete']);
+}
+
 
 // Handle POST requests for updating transactions
 if (isset($_POST['update'])) {
     $stmt = $pdo->prepare("UPDATE transactions SET transactionDescription = ?, transactionAmount = ?, transactionDate = ?, transactionType = ?, categoryID = ? WHERE transactionID = ?");
     $stmt->execute([$_POST['description'], $_POST['amount'], $_POST['date'], $_POST['type'], $_POST['categoryID'], $_POST['transactionID']]);
 
-    // Update account balance
-    updateAccountBalance($pdo, $accountID);
+
 
     header('Location: account_details.php?accountID=' . $accountID);
     exit();
 }
 
-// Handle deletion of a transaction
-if (isset($_GET['delete'])) {
-    $transactionID = $_GET['delete'];
-    $stmt = $pdo->prepare("DELETE FROM transactions WHERE transactionID = ?");
-    $stmt->execute([$transactionID]);
 
-    // Update account balance
-    updateAccountBalance($pdo, $accountID);
-
-    header('Location: account_details.php?accountID=' . $accountID);
-    exit();
-}
 
 // Fetch the account details for the selected account
 $search = $_POST['search'] ?? '';
 $sort = $_GET['sort'] ?? 'transactionDate';
 $order = $_GET['order'] ?? 'DESC';
 
-// Fetch transactions for the selected account including the transaction type
-$transactionsStmt = $pdo->prepare("SELECT t.transactionID, t.transactionDescription, t.transactionAmount, t.transactionDate, t.transactionType, c.categoryName FROM transactions t LEFT JOIN category c ON t.categoryID = c.categoryID WHERE t.accountID = ? AND (t.transactionDescription LIKE ? OR t.transactionAmount LIKE ?) ORDER BY $sort $order");
-$transactionsStmt->execute([$accountID, '%' . $search . '%', '%' . $search . '%']);
-$transactions = $transactionsStmt->fetchAll();
-
-// Fetch the current balance from the account table
-$balanceStmt = $pdo->prepare("SELECT accountBalance FROM account WHERE accountID = ?");
-$balanceStmt->execute([$accountID]);
-$currentBalance = $balanceStmt->fetchColumn();
+$transactions = fetchTransactions($accountID, $search, $sort, $order);
+$currentBalance = fetchCurrentBalance($accountID);
 
 ob_end_flush(); // End output buffering and flush all output
 ?>
@@ -163,7 +201,7 @@ ob_end_flush(); // End output buffering and flush all output
             <?php foreach ($transactions as $transaction): ?>
             <tr>
                 <td><?= htmlspecialchars($transaction['categoryName']) ?></td>
-                <td>$<?= number_format(htmlspecialchars($transaction['transactionAmount']), 2) ?></td>
+                <td>$<?= ($transaction['transactionType'] === 'Expense') ? number_format(abs(htmlspecialchars($transaction['transactionAmount'])), 2) : number_format(htmlspecialchars($transaction['transactionAmount']), 2) ?></td>
                 <td><?= htmlspecialchars($transaction['transactionDate']) ?></td>
                 <td><?= htmlspecialchars($transaction['transactionType']) ?></td>
                 <td><?= htmlspecialchars($transaction['transactionDescription']) ?></td>
