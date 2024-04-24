@@ -1,6 +1,9 @@
 <?php
+
 ob_start(); // Start output buffering
 session_start();
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 // Check if the user is logged in, otherwise redirect to login page
 if (!isset($_SESSION['userid'])) {
@@ -13,18 +16,39 @@ require_once 'includes/database-connection.php';
 
 $accountID = $_GET['accountID'] ?? null; // Get the accountID from the URL
 
+function updateAccountBalance($pdo, $accountID) {
+    // Calculate the new balance
+    $stmt = $pdo->prepare("SELECT SUM(CASE WHEN transactionType = 'Income' THEN transactionAmount ELSE -transactionAmount END) AS balance FROM transactions WHERE accountID = ?");
+    $stmt->execute([$accountID]);
+    $balance = $stmt->fetchColumn();
+
+    // Update the account balance in the account table
+    $updateStmt = $pdo->prepare("UPDATE account SET accountBalance = ? WHERE accountID = ?");
+    $updateStmt->execute([$balance, $accountID]);
+
+    return $balance;
+}
+
 // Handle POST requests for adding transactions
 if (isset($_POST['add'])) {
     $stmt = $pdo->prepare("INSERT INTO transactions (transactionDescription, transactionAmount, transactionDate, transactionType, accountID, categoryID) VALUES (?, ?, ?, ?, ?, ?)");
     $stmt->execute([$_POST['description'], $_POST['amount'], $_POST['date'], $_POST['type'], $accountID, $_POST['category']]);
+
+    // Update account balance
+    updateAccountBalance($pdo, $accountID);
+
     header('Location: account_details.php?accountID=' . $accountID);
     exit();
 }
 
-// WOP: Handle POST requests for updating transactions
+// Handle POST requests for updating transactions
 if (isset($_POST['update'])) {
     $stmt = $pdo->prepare("UPDATE transactions SET transactionDescription = ?, transactionAmount = ?, transactionDate = ?, transactionType = ?, categoryID = ? WHERE transactionID = ?");
-    $stmt->execute([$_POST['description'], $_POST['amount'], $_POST['date'], $_POST['type'], $_POST['transactionID']]);
+    $stmt->execute([$_POST['description'], $_POST['amount'], $_POST['date'], $_POST['type'], $_POST['categoryID'], $_POST['transactionID']]);
+
+    // Update account balance
+    updateAccountBalance($pdo, $accountID);
+
     header('Location: account_details.php?accountID=' . $accountID);
     exit();
 }
@@ -35,7 +59,9 @@ if (isset($_GET['delete'])) {
     $stmt = $pdo->prepare("DELETE FROM transactions WHERE transactionID = ?");
     $stmt->execute([$transactionID]);
 
-    // Redirect to clear the 'delete' parameter from the URL
+    // Update account balance
+    updateAccountBalance($pdo, $accountID);
+
     header('Location: account_details.php?accountID=' . $accountID);
     exit();
 }
@@ -50,6 +76,11 @@ $transactionsStmt = $pdo->prepare("SELECT t.transactionID, t.transactionDescript
 $transactionsStmt->execute([$accountID, '%' . $search . '%', '%' . $search . '%']);
 $transactions = $transactionsStmt->fetchAll();
 
+// Fetch the current balance from the account table
+$balanceStmt = $pdo->prepare("SELECT accountBalance FROM account WHERE accountID = ?");
+$balanceStmt->execute([$accountID]);
+$currentBalance = $balanceStmt->fetchColumn();
+
 ob_end_flush(); // End output buffering and flush all output
 ?>
 
@@ -59,7 +90,6 @@ ob_end_flush(); // End output buffering and flush all output
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Account Details</title>
-    <!-- CSS styling for the page -->
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -86,16 +116,15 @@ ob_end_flush(); // End output buffering and flush all output
 <body>
     <h1>Account Transactions</h1>
     <a href="manage_accounts.php">Back to Accounts</a>
-    
-    
-    <!-- Search Form -->
+
+    <h2>Current Balance: $<?= number_format($currentBalance, 2) ?></h2>
+
     <h2>Transactions Search</h2>
     <form method="post" action="">
         <input type="text" name="search" placeholder="Search transactions...">
         <button type="submit">Search</button>
     </form>
 
-    <!-- Transaction Form for Adding New Transactions -->
     <h2>Add New Transaction</h2>
     <form method="post" action="">
         <input type="text" name="description" placeholder="Description">
@@ -107,7 +136,6 @@ ob_end_flush(); // End output buffering and flush all output
         </select>
         <select name="category">
             <?php
-            // Fetch all categories for the category dropdown
             $categoriesStmt = $pdo->prepare("SELECT categoryID, categoryName FROM category");
             $categoriesStmt->execute();
             $categories = $categoriesStmt->fetchAll();
@@ -119,12 +147,10 @@ ob_end_flush(); // End output buffering and flush all output
         <button type="submit" name="add">Add Transaction</button>
     </form>
 
-    <!-- Transaction table for displaying Transactions -->
     <h2>Transactions</h2>
     <table>
         <thead>
             <tr>
-                <!-- Sorting links to the table headers -->
                 <th><a href="?accountID=<?= $accountID ?>&sort=categoryName&order=<?= $order == 'DESC' ? 'ASC' : 'DESC' ?>">Category</a></th>
                 <th><a href="?accountID=<?= $accountID ?>&sort=transactionAmount&order=<?= $order == 'DESC' ? 'ASC' : 'DESC' ?>">Amount</a></th>
                 <th><a href="?accountID=<?= $accountID ?>&sort=transactionDate&order=<?= $order == 'DESC' ? 'ASC' : 'DESC' ?>">Date</a></th>
